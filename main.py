@@ -15,7 +15,6 @@ app = FastAPI(
 
 origins = [
     "http://localhost:3000",     # React CRA
-    "http://localhost:5173",     # Vite
     # Add your Azure Static Web App URL here later
     # "https://your-static-app.azurestaticapps.net"
 ]
