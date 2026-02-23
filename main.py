@@ -19,6 +19,7 @@ origins = [
     # "https://your-static-app.azurestaticapps.net"
 ]
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
