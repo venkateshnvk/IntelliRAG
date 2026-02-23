@@ -1,11 +1,22 @@
 from fastapi import APIRouter, HTTPException
-from api.schemas import QueryRequest, QueryResponse
+from api.schemas import (
+    QueryRequest,
+    QueryResponse,
+    EvaluationRequest,
+    EvaluationResponse
+)
 from llm.generator import RAGGenerator
+from evaluation.ragas_eval import RAGASEvaluator
 
 router = APIRouter()
+
 rag = RAGGenerator()
+evaluator = RAGASEvaluator()
 
 
+# ---------------------------------------------------------
+# ASK ENDPOINT (Inference Only)
+# ---------------------------------------------------------
 @router.post("/ask", response_model=QueryResponse)
 def ask_question(request: QueryRequest):
 
@@ -28,7 +39,29 @@ def ask_question(request: QueryRequest):
 
 
 # ---------------------------------------------------------
-# NEW: Get Unique Patient IDs
+# EVALUATION ENDPOINT (RAGAS)
+# ---------------------------------------------------------
+@router.post("/evaluate", response_model=EvaluationResponse)
+def evaluate_answer(request: EvaluationRequest):
+
+    try:
+        result, answer_text = evaluator.evaluate_single_query(
+            query=request.query,
+            patient_id=request.patient_id,
+            reference_answer=request.reference_answer
+        )
+
+        return EvaluationResponse(
+            answer={"generated_answer": answer_text},
+            ragas_metrics=result
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------
+# GET UNIQUE PATIENT IDs
 # ---------------------------------------------------------
 @router.get("/patients")
 def get_patients():
