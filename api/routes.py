@@ -5,7 +5,6 @@ from llm.generator import RAGGenerator
 router = APIRouter()
 rag = RAGGenerator()
 
-
 @router.post("/ask", response_model=QueryResponse)
 def ask_question(request: QueryRequest):
 
