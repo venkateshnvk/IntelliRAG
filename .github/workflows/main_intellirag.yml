@@ -7,36 +7,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # We DO NOT install dependencies here.
-      # Azure Oryx will install them during deployment.
-
-      - name: Upload artifact for deployment
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-app
-          path: .
-
   deploy:
     runs-on: ubuntu-latest
-    needs: build
-    permissions:
-      id-token: write
-      contents: read
 
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: python-app
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -45,9 +21,9 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_0E618CD5C6354652AAC55AC1EF46159F }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_A1C9B2D33592460087B5E9975A94247F }}
 
-      - name: Deploy to Azure Web App
+      - name: Deploy to Azure Web App (Source Build)
         uses: azure/webapps-deploy@v3
         with:
-          app-name: 'IntelliRAG'
-          slot-name: 'Production'
-          package: .
+          app-name: IntelliRAG
+          slot-name: Production
+          scm-do-build-during-deployment: true
