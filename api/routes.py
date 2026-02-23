@@ -6,7 +6,6 @@ from api.schemas import (
     EvaluationResponse
 )
 from llm.generator import RAGGenerator
-#from evaluation.ragas_eval import RAGASEvaluator
 
 router = APIRouter()
 
