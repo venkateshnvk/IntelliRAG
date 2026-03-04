@@ -9,11 +9,25 @@ class ModelRouter:
     @staticmethod
     def choose_model(query: str, retrieval_confidence: float):
 
-        # Low retrieval confidence → escalate model
-        if retrieval_confidence < 0.02:
+        query = query.lower().strip()
+
+        # ------------------------------------------------
+        # 1️⃣ Short fact queries → fast model
+        # ------------------------------------------------
+        if len(query.split()) <= 5:
+            return AZURE_OPENAI_CHAT_DEPLOYMENT
+
+
+        # ------------------------------------------------
+        # 2️⃣ Low retrieval confidence → bigger model
+        # ------------------------------------------------
+        if retrieval_confidence is not None and retrieval_confidence < 0.25:
             return AZURE_OPENAI_FALLBACK_DEPLOYMENT
 
-        # Complex reasoning queries → escalate
+
+        # ------------------------------------------------
+        # 3️⃣ Complex reasoning queries
+        # ------------------------------------------------
         complex_keywords = [
             "compare",
             "analyze",
@@ -21,10 +35,16 @@ class ModelRouter:
             "risk",
             "why",
             "explain",
-            "relationship"
+            "relationship",
+            "impact",
+            "cause"
         ]
 
-        if any(word in query.lower() for word in complex_keywords):
+        if any(word in query for word in complex_keywords):
             return AZURE_OPENAI_FALLBACK_DEPLOYMENT
 
+
+        # ------------------------------------------------
+        # 4️⃣ Default → fast model
+        # ------------------------------------------------
         return AZURE_OPENAI_CHAT_DEPLOYMENT
