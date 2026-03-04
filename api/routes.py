@@ -1,14 +1,87 @@
 from fastapi import APIRouter, HTTPException
 from api.schemas import QueryRequest, QueryResponse
 from llm.generator import RAGGenerator
+import time
 
 router = APIRouter()
 rag = RAGGenerator()
+
+
+# ---------------------------------------------------------
+# Query Classifier (Conversation vs RAG)
+# ---------------------------------------------------------
+
+def classify_query(query: str):
+
+    q = query.lower().strip()
+
+    greetings = [
+        "hi",
+        "hello",
+        "hey",
+        "how are you",
+        "good morning",
+        "good evening",
+        "who are you",
+        "what can you do"
+    ]
+
+    if q in greetings:
+        return "conversation"
+
+    return "rag"
+
+
+# ---------------------------------------------------------
+# ASK ENDPOINT
+# ---------------------------------------------------------
 
 @router.post("/ask", response_model=QueryResponse)
 def ask_question(request: QueryRequest):
 
     try:
+
+        query_type = classify_query(request.query)
+
+        # -----------------------------------
+        # Conversational Assistant
+        # -----------------------------------
+
+        if query_type == "conversation":
+
+            start = time.time()
+
+            response = rag.client.chat.completions.create(
+                model=rag.chat_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are IntelliRAG, a helpful healthcare AI assistant."
+                    },
+                    {
+                        "role": "user",
+                        "content": request.query
+                    }
+                ],
+                temperature=0.7
+            )
+
+            latency = (time.time() - start) * 1000
+
+            answer = response.choices[0].message.content
+
+            return QueryResponse(
+                answer={"answer": answer},
+                retrieval_confidence_score=1.0,
+                retrieval_confidence_level="High",
+                model_used="gpt-4o",
+                latency_ms=latency
+            )
+
+        # -----------------------------------
+        # RAG Pipeline (Existing Logic)
+        # -----------------------------------
+
         result = rag.generate_answer(
             query=request.query,
             patient_id=request.patient_id
@@ -27,12 +100,14 @@ def ask_question(request: QueryRequest):
 
 
 # ---------------------------------------------------------
-# NEW: Get Unique Patient IDs
+# GET PATIENT IDS
 # ---------------------------------------------------------
+
 @router.get("/patients")
 def get_patients():
 
     try:
+
         results = rag.retriever.client.search(
             search_text="*",
             select=["patient_id"],
