@@ -3,6 +3,7 @@ from config.settings import (
     AZURE_OPENAI_FALLBACK_DEPLOYMENT
 )
 
+
 class ModelRouter:
 
     @staticmethod
@@ -10,23 +11,40 @@ class ModelRouter:
 
         query = query.lower().strip()
 
-        # ------------------------------------------------
-        # 1️⃣ Short fact queries → fast model
-        # ------------------------------------------------
+        # ---------------------------------
+        # Simple fact lookup → Fast model
+        # ---------------------------------
+        simple_queries = [
+            "name",
+            "age",
+            "gender",
+            "blood type",
+            "doctor",
+            "diagnosis",
+            "visit date"
+        ]
+
+        if any(word in query for word in simple_queries):
+            return AZURE_OPENAI_CHAT_DEPLOYMENT
+
+
+        # ---------------------------------
+        # Short queries → Fast model
+        # ---------------------------------
         if len(query.split()) <= 5:
             return AZURE_OPENAI_CHAT_DEPLOYMENT
 
 
-        # ------------------------------------------------
-        # 2️⃣ Low retrieval confidence → bigger model
-        # ------------------------------------------------
-        if retrieval_confidence is not None and retrieval_confidence < 0.25:
+        # ---------------------------------
+        # Low retrieval confidence → Large model
+        # ---------------------------------
+        if retrieval_confidence < 0.25:
             return AZURE_OPENAI_FALLBACK_DEPLOYMENT
 
 
-        # ------------------------------------------------
-        # 3️⃣ Complex reasoning queries
-        # ------------------------------------------------
+        # ---------------------------------
+        # Complex reasoning
+        # ---------------------------------
         complex_keywords = [
             "compare",
             "analyze",
@@ -43,7 +61,7 @@ class ModelRouter:
             return AZURE_OPENAI_FALLBACK_DEPLOYMENT
 
 
-        # ------------------------------------------------
-        # 4️⃣ Default → fast model
-        # ------------------------------------------------
+        # ---------------------------------
+        # Default → Fast model
+        # ---------------------------------
         return AZURE_OPENAI_CHAT_DEPLOYMENT
