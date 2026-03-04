@@ -3,7 +3,6 @@ from config.settings import (
     AZURE_OPENAI_FALLBACK_DEPLOYMENT
 )
 
-
 class ModelRouter:
 
     @staticmethod
