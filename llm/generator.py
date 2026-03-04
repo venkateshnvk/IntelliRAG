@@ -1,6 +1,8 @@
 from openai import AzureOpenAI
 import json
 import time
+import re
+from concurrent.futures import ThreadPoolExecutor
 
 from retrieval.search import Retriever
 from llm.model_router import ModelRouter
@@ -24,22 +26,139 @@ class RAGGenerator:
             api_version=AZURE_OPENAI_API_VERSION
         )
 
-        self.greetings = [
-            "hi",
-            "hello",
-            "hey",
-            "good morning",
-            "good evening"
-        ]
+        # Intent cache for repeated queries
+        self.intent_cache = {}
+
+        # Thread pool for parallel execution
+        self.executor = ThreadPoolExecutor(max_workers=2)
 
     # -----------------------------------------------------
-    # Greeting Detection
+    # Intent Detection with Cache
     # -----------------------------------------------------
-    def _is_greeting(self, query):
+    def _detect_intent(self, query):
 
-        query = query.lower().strip()
+        query_key = query.lower().strip()
 
-        return any(g in query for g in self.greetings)
+        if query_key in self.intent_cache:
+            return self.intent_cache[query_key]
+
+        prompt = f"""
+Classify the user query into one of two intents:
+
+conversation
+rag
+
+Examples:
+hi → conversation
+hello → conversation
+how are you → conversation
+who are you → conversation
+
+patient name → rag
+what is the diagnosis → rag
+what medication is prescribed → rag
+
+Return only one word.
+
+Query: {query}
+"""
+
+        response = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an intent classifier."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0
+        )
+
+        intent = response.choices[0].message.content.strip().lower()
+
+        if "conversation" not in intent:
+            intent = "rag"
+
+        self.intent_cache[query_key] = intent
+
+        return intent
+
+    # -----------------------------------------------------
+    # Direct Answer Extraction
+    # -----------------------------------------------------
+    def _direct_answer(self, query, docs):
+
+        query_lower = query.lower()
+
+        patterns = {
+            "patient name": r"Full Name:\s*([A-Za-z\s]+)",
+            "age": r"Age:\s*(\d+)",
+            "blood type": r"Blood Type:\s*([A-Za-z+-]+)",
+            "primary diagnosis": r"Primary:\s*([A-Za-z\s]+)",
+            "diagnosis": r"Primary:\s*([A-Za-z\s]+)"
+        }
+
+        for key, pattern in patterns.items():
+
+            if key in query_lower:
+
+                for doc in docs:
+
+                    match = re.search(pattern, doc["content"], re.IGNORECASE)
+
+                    if match:
+
+                        value = match.group(1).strip()
+
+                        return {
+                            "answer": value,
+                            "evidence": [match.group(0)],
+                            "source_report": doc["report_type"]
+                        }
+
+        return None
+
+    # -----------------------------------------------------
+    # Conversation Handler
+    # -----------------------------------------------------
+    def _handle_conversation(self, query, start_time):
+
+        response = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """
+You are IntelliRAG, an enterprise healthcare AI assistant.
+
+You help users understand patient medical records such as:
+- diagnoses
+- medications
+- scan reports
+- billing
+- insurance
+
+Respond in a friendly and professional conversational tone.
+"""
+                },
+                {"role": "user", "content": query}
+            ],
+            temperature=0.7
+        )
+
+        answer = response.choices[0].message.content
+
+        latency_ms = round((time.time() - start_time) * 1000, 2)
+
+        return {
+            "answer": {
+                "answer": answer,
+                "evidence": [],
+                "source_report": None
+            },
+            "retrieval_confidence_score": 1.0,
+            "retrieval_confidence_level": "High",
+            "model_used": "gpt-4o-mini",
+            "latency_ms": latency_ms
+        }
 
     # -----------------------------------------------------
     # Build Structured Context
@@ -66,47 +185,41 @@ class RAGGenerator:
         return "\n".join(context_sections)
 
     # -----------------------------------------------------
-    # Main RAG Execution
+    # Main RAG Pipeline
     # -----------------------------------------------------
     def generate_answer(self, query, patient_id, top_k=3):
 
         start_time = time.time()
 
         # -------------------------------------------------
-        # Step 0 — Greeting Handling
+        # Parallel Intent Detection + Retrieval
         # -------------------------------------------------
-        if self._is_greeting(query):
 
-            latency_ms = round((time.time() - start_time) * 1000, 2)
+        intent_future = self.executor.submit(self._detect_intent, query)
 
-            return {
-                "answer": {
-                    "answer": "Hello! I'm IntelliRAG, your healthcare assistant. You can ask about the patient's diagnosis, medications, medical reports, billing details, or insurance information.",
-                    "evidence": [],
-                    "source_report": None
-                },
-                "retrieval_confidence_score": None,
-                "retrieval_confidence_level": None,
-                "model_used": None,
-                "latency_ms": latency_ms
-            }
-
-        # -------------------------------------------------
-        # Step 1 — Retrieval
-        # -------------------------------------------------
-        retrieval_output = self.retriever.hybrid_search(
-            query=query,
-            patient_id=patient_id,
-            top_k=top_k
+        retrieval_future = self.executor.submit(
+            self.retriever.hybrid_search,
+            query,
+            patient_id,
+            top_k
         )
+
+        intent = intent_future.result()
+        retrieval_output = retrieval_future.result()
+
+        print("\nDetected intent:", intent)
+
+        if intent == "conversation":
+            return self._handle_conversation(query, start_time)
+
+        # -------------------------------------------------
+        # Retrieval Results
+        # -------------------------------------------------
 
         retrieved_docs = retrieval_output["documents"]
         confidence_score = retrieval_output["confidence_score"]
         confidence_level = retrieval_output["confidence_level"]
 
-        # -------------------------------------------------
-        # If nothing retrieved
-        # -------------------------------------------------
         if not retrieved_docs:
 
             latency_ms = round((time.time() - start_time) * 1000, 2)
@@ -124,28 +237,38 @@ class RAGGenerator:
             }
 
         # -------------------------------------------------
-        # Reduce context (faster LLM)
+        # Direct Answer Extraction (fast path)
         # -------------------------------------------------
+
+        direct_answer = self._direct_answer(query, retrieved_docs)
+
+        if direct_answer:
+
+            latency_ms = round((time.time() - start_time) * 1000, 2)
+
+            return {
+                "answer": direct_answer,
+                "retrieval_confidence_score": 1.0,
+                "retrieval_confidence_level": "High",
+                "model_used": "direct-extraction",
+                "latency_ms": latency_ms
+            }
+
+        # Reduce context size
         retrieved_docs = retrieved_docs[:3]
 
         structured_context = self._build_structured_context(retrieved_docs)
 
         # -------------------------------------------------
-        # Step 2 — Model Routing
+        # Model Router
         # -------------------------------------------------
+
         model_to_use = ModelRouter.choose_model(query, confidence_score)
 
-        print("\n--- RAG DEBUG INFO ---")
-        print("Query:", query)
-        print("Patient ID:", patient_id)
-        print("Retrieval confidence:", confidence_score)
-        print("Confidence level:", confidence_level)
-        print("Model selected:", model_to_use)
-        print("----------------------\n")
+        # -------------------------------------------------
+        # LLM Prompt
+        # -------------------------------------------------
 
-        # -------------------------------------------------
-        # Step 3 — Prompt
-        # -------------------------------------------------
         system_prompt = """
 You are IntelliRAG, an enterprise healthcare AI assistant.
 
@@ -182,8 +305,9 @@ Provide a clear answer using the records.
 """
 
         # -------------------------------------------------
-        # Step 4 — LLM Call
+        # LLM Call
         # -------------------------------------------------
+
         response = self.client.chat.completions.create(
             model=model_to_use,
             messages=[
@@ -196,9 +320,6 @@ Provide a clear answer using the records.
 
         answer_raw = response.choices[0].message.content
 
-        # -------------------------------------------------
-        # Step 5 — Safe JSON Parsing
-        # -------------------------------------------------
         try:
             parsed_answer = json.loads(answer_raw)
 
@@ -210,14 +331,8 @@ Provide a clear answer using the records.
                 "source_report": None
             }
 
-        # -------------------------------------------------
-        # Step 6 — Latency
-        # -------------------------------------------------
         latency_ms = round((time.time() - start_time) * 1000, 2)
 
-        # -------------------------------------------------
-        # Final Response
-        # -------------------------------------------------
         return {
             "answer": parsed_answer,
             "retrieval_confidence_score": confidence_score,
