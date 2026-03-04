@@ -26,39 +26,42 @@ class RAGGenerator:
             api_version=AZURE_OPENAI_API_VERSION
         )
 
-        # Intent cache for repeated queries
         self.intent_cache = {}
-
-        # Thread pool for parallel execution
         self.executor = ThreadPoolExecutor(max_workers=2)
 
     # -----------------------------------------------------
-    # Intent Detection with Cache
+    # Intent Detection
     # -----------------------------------------------------
+
     def _detect_intent(self, query):
 
-        query_key = query.lower().strip()
+        q = query.lower().strip()
 
-        if query_key in self.intent_cache:
-            return self.intent_cache[query_key]
+        if q in self.intent_cache:
+            return self.intent_cache[q]
 
         prompt = f"""
-Classify the user query into one of two intents:
+Classify the query intent.
 
-conversation
-rag
+conversation → greetings or assistant questions
+rag → patient record question
 
 Examples:
+
 hi → conversation
 hello → conversation
 how are you → conversation
 who are you → conversation
 
 patient name → rag
-what is the diagnosis → rag
-what medication is prescribed → rag
+diagnosis → rag
+medications → rag
 
-Return only one word.
+Return only one word:
+
+conversation
+or
+rag
 
 Query: {query}
 """
@@ -66,7 +69,7 @@ Query: {query}
         response = self.client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are an intent classifier."},
+                {"role": "system", "content": "You classify user intent."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0
@@ -77,28 +80,28 @@ Query: {query}
         if "conversation" not in intent:
             intent = "rag"
 
-        self.intent_cache[query_key] = intent
+        self.intent_cache[q] = intent
 
         return intent
 
     # -----------------------------------------------------
     # Direct Answer Extraction
     # -----------------------------------------------------
+
     def _direct_answer(self, query, docs):
 
-        query_lower = query.lower()
+        q = query.lower()
 
         patterns = {
             "patient name": r"Full Name:\s*([A-Za-z\s]+)",
             "age": r"Age:\s*(\d+)",
             "blood type": r"Blood Type:\s*([A-Za-z+-]+)",
-            "primary diagnosis": r"Primary:\s*([A-Za-z\s]+)",
             "diagnosis": r"Primary:\s*([A-Za-z\s]+)"
         }
 
         for key, pattern in patterns.items():
 
-            if key in query_lower:
+            if key in q:
 
                 for doc in docs:
 
@@ -119,81 +122,66 @@ Query: {query}
     # -----------------------------------------------------
     # Conversation Handler
     # -----------------------------------------------------
-    def _handle_conversation(self, query, start_time):
+
+    def _handle_conversation(self, query, start):
 
         response = self.client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": """
-You are IntelliRAG, an enterprise healthcare AI assistant.
-
-You help users understand patient medical records such as:
-- diagnoses
-- medications
-- scan reports
-- billing
-- insurance
-
-Respond in a friendly and professional conversational tone.
-"""
+                    "content": "You are IntelliRAG, a healthcare AI assistant."
                 },
                 {"role": "user", "content": query}
             ],
             temperature=0.7
         )
 
-        answer = response.choices[0].message.content
-
-        latency_ms = round((time.time() - start_time) * 1000, 2)
+        latency = round((time.time() - start) * 1000, 2)
 
         return {
             "answer": {
-                "answer": answer,
+                "answer": response.choices[0].message.content,
                 "evidence": [],
                 "source_report": None
             },
             "retrieval_confidence_score": 1.0,
             "retrieval_confidence_level": "High",
             "model_used": "gpt-4o-mini",
-            "latency_ms": latency_ms
+            "latency_ms": latency
         }
 
     # -----------------------------------------------------
-    # Build Structured Context
+    # Context Builder
     # -----------------------------------------------------
-    def _build_structured_context(self, retrieved_docs):
+
+    def _build_context(self, docs):
 
         grouped = {}
 
-        for doc in retrieved_docs:
-            report_type = doc["report_type"]
-            grouped.setdefault(report_type, []).append(doc["content"])
+        for doc in docs:
+            grouped.setdefault(doc["report_type"], []).append(doc["content"])
 
-        context_sections = []
+        sections = []
 
-        for report_type, contents in grouped.items():
+        for rtype, contents in grouped.items():
 
-            section = f"\n### {report_type.upper()} REPORTS\n"
+            section = f"\n### {rtype.upper()} REPORTS\n"
 
-            for content in contents:
-                section += content + "\n"
+            for c in contents:
+                section += c + "\n"
 
-            context_sections.append(section)
+            sections.append(section)
 
-        return "\n".join(context_sections)
+        return "\n".join(sections)
 
     # -----------------------------------------------------
-    # Main RAG Pipeline
+    # MAIN PIPELINE
     # -----------------------------------------------------
+
     def generate_answer(self, query, patient_id, top_k=3):
 
-        start_time = time.time()
-
-        # -------------------------------------------------
-        # Parallel Intent Detection + Retrieval
-        # -------------------------------------------------
+        start = time.time()
 
         intent_future = self.executor.submit(self._detect_intent, query)
 
@@ -205,24 +193,18 @@ Respond in a friendly and professional conversational tone.
         )
 
         intent = intent_future.result()
-        retrieval_output = retrieval_future.result()
-
-        print("\nDetected intent:", intent)
+        retrieval = retrieval_future.result()
 
         if intent == "conversation":
-            return self._handle_conversation(query, start_time)
+            return self._handle_conversation(query, start)
 
-        # -------------------------------------------------
-        # Retrieval Results
-        # -------------------------------------------------
+        docs = retrieval["documents"]
+        score = retrieval["confidence_score"]
+        level = retrieval["confidence_level"]
 
-        retrieved_docs = retrieval_output["documents"]
-        confidence_score = retrieval_output["confidence_score"]
-        confidence_level = retrieval_output["confidence_level"]
+        if not docs:
 
-        if not retrieved_docs:
-
-            latency_ms = round((time.time() - start_time) * 1000, 2)
+            latency = round((time.time() - start) * 1000, 2)
 
             return {
                 "answer": {
@@ -230,86 +212,63 @@ Respond in a friendly and professional conversational tone.
                     "evidence": [],
                     "source_report": None
                 },
-                "retrieval_confidence_score": confidence_score,
-                "retrieval_confidence_level": confidence_level,
+                "retrieval_confidence_score": score,
+                "retrieval_confidence_level": level,
                 "model_used": None,
-                "latency_ms": latency_ms
+                "latency_ms": latency
             }
 
-        # -------------------------------------------------
-        # Direct Answer Extraction (fast path)
-        # -------------------------------------------------
+        fast = self._direct_answer(query, docs)
 
-        direct_answer = self._direct_answer(query, retrieved_docs)
+        if fast:
 
-        if direct_answer:
-
-            latency_ms = round((time.time() - start_time) * 1000, 2)
+            latency = round((time.time() - start) * 1000, 2)
 
             return {
-                "answer": direct_answer,
+                "answer": fast,
                 "retrieval_confidence_score": 1.0,
                 "retrieval_confidence_level": "High",
                 "model_used": "direct-extraction",
-                "latency_ms": latency_ms
+                "latency_ms": latency
             }
 
-        # Reduce context size
-        retrieved_docs = retrieved_docs[:3]
+        docs = docs[:3]
 
-        structured_context = self._build_structured_context(retrieved_docs)
+        context = self._build_context(docs)
 
-        # -------------------------------------------------
-        # Model Router
-        # -------------------------------------------------
-
-        model_to_use = ModelRouter.choose_model(query, confidence_score)
-
-        # -------------------------------------------------
-        # LLM Prompt
-        # -------------------------------------------------
+        model = ModelRouter.choose_model(query, score)
 
         system_prompt = """
-You are IntelliRAG, an enterprise healthcare AI assistant.
+You are IntelliRAG.
 
-Your job is to answer questions using patient medical records.
+Answer questions using patient medical records.
 
-Guidelines:
-- Respond in clear, natural, professional English.
-- Your answer should sound like a human healthcare assistant.
-- Always base your answer strictly on the provided patient records.
-- Do not invent information.
-
-If the answer is not found in the records, respond:
+Rules:
+Use only the provided records.
+If answer not found say:
 "I could not find that information in the patient's records."
 
-Return JSON in this format:
+Return JSON:
 
 {
-  "answer": "natural language explanation",
-  "evidence": ["exact snippet from records"],
-  "source_report": "medical | billing | insurance"
+ "answer": "text",
+ "evidence": ["snippet"],
+ "source_report": "medical"
 }
 """
 
         user_prompt = f"""
 Patient ID: {patient_id}
 
-Patient Records:
-{structured_context}
+Records:
+{context}
 
-User Question:
+Question:
 {query}
-
-Provide a clear answer using the records.
 """
 
-        # -------------------------------------------------
-        # LLM Call
-        # -------------------------------------------------
-
         response = self.client.chat.completions.create(
-            model=model_to_use,
+            model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -318,25 +277,23 @@ Provide a clear answer using the records.
             response_format={"type": "json_object"}
         )
 
-        answer_raw = response.choices[0].message.content
+        raw = response.choices[0].message.content
 
         try:
-            parsed_answer = json.loads(answer_raw)
-
-        except json.JSONDecodeError:
-
-            parsed_answer = {
-                "answer": "The system generated an unexpected response format.",
+            parsed = json.loads(raw)
+        except:
+            parsed = {
+                "answer": "Unexpected response format.",
                 "evidence": [],
                 "source_report": None
             }
 
-        latency_ms = round((time.time() - start_time) * 1000, 2)
+        latency = round((time.time() - start) * 1000, 2)
 
         return {
-            "answer": parsed_answer,
-            "retrieval_confidence_score": confidence_score,
-            "retrieval_confidence_level": confidence_level,
-            "model_used": model_to_use,
-            "latency_ms": latency_ms
+            "answer": parsed,
+            "retrieval_confidence_score": score,
+            "retrieval_confidence_level": level,
+            "model_used": model,
+            "latency_ms": latency
         }
