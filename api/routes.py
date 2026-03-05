@@ -8,7 +8,7 @@ rag = RAGGenerator()
 
 
 # ---------------------------------------------------------
-# Query Classifier (Conversation vs RAG)
+# Query Classifier
 # ---------------------------------------------------------
 
 def classify_query(query: str):
@@ -52,7 +52,7 @@ def ask_question(request: QueryRequest):
             start = time.time()
 
             response = rag.client.chat.completions.create(
-                model=rag.chat_model,
+                model="gpt-4o-mini",
                 messages=[
                     {
                         "role": "system",
@@ -71,15 +71,19 @@ def ask_question(request: QueryRequest):
             answer = response.choices[0].message.content
 
             return QueryResponse(
-                answer={"answer": answer},
+                answer={
+                    "answer": answer,
+                    "evidence": [],
+                    "source_report": None
+                },
                 retrieval_confidence_score=1.0,
                 retrieval_confidence_level="High",
-                model_used="gpt-4o",
+                model_used="gpt-4o-mini",
                 latency_ms=latency
             )
 
         # -----------------------------------
-        # RAG Pipeline (Existing Logic)
+        # RAG PIPELINE
         # -----------------------------------
 
         result = rag.generate_answer(
