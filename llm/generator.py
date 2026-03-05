@@ -13,7 +13,6 @@ from config.settings import (
     AZURE_OPENAI_API_VERSION
 )
 
-
 class RAGGenerator:
 
     def __init__(self):
