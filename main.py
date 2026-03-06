@@ -17,18 +17,10 @@ origins = [
     "https://happy-stone-0c01c011e.1.azurestaticapps.net",
     "http://localhost:3000"
 ]
-    # React CRA
-    # Add your Azure Static Web App URL here later
-    # "https://your-static-app.azurestaticapps.net"
-]
-
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://happy-stone-0c01c011e.1.azurestaticapps.net",
-        "http://localhost:3000"
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
