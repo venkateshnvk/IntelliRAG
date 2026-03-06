@@ -14,7 +14,10 @@ app = FastAPI(
 # -----------------------------
 
 origins = [
-    "http://https://happy-stone-0c01c011e.1.azurestaticapps.net",     # React CRA
+    "https://happy-stone-0c01c011e.1.azurestaticapps.net",
+    "http://localhost:3000"
+]
+    # React CRA
     # Add your Azure Static Web App URL here later
     # "https://your-static-app.azurestaticapps.net"
 ]
