@@ -26,6 +26,7 @@ origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://happy-stone-0c01c011e.1.azurestaticapps.net",
         "http://localhost:3000"
     ],
     allow_credentials=True,
